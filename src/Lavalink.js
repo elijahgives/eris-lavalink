@@ -158,24 +158,6 @@ class Lavalink extends EventEmitter {
 	}
 
 	/**
-	 * Send data to Lavalink
-	 * @param {String} op Op name
-	 * @param {*} data Data to send
-	 */
-	send(data) {
-		const ws = this.ws;
-		if (!ws) return;
-
-		try {
-			var payload = JSON.stringify(data);
-		} catch (err) {
-			return this.emit('error', 'Unable to stringify payload.');
-		}
-
-		ws.send(payload);
-	}
-
-	/**
 	 * Handle message from the server
 	 * @param {String} message Raw websocket message
 	 * @private

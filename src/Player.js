@@ -119,7 +119,6 @@ class Player extends EventEmitter {
     }
 
     async _disconnect() {
-        console.log("_disconnect called")
         this.playing = false;
 
         if (this.paused) {
@@ -176,7 +175,6 @@ class Player extends EventEmitter {
      * @returns {void}
      */
     async stop() {
-        console.log("[!] stopping")
 
         try {
             await axios.patch(
@@ -325,10 +323,8 @@ class Player extends EventEmitter {
      * @private
      */
     onTrackEnd(message) {
-        console.log(message);
-        console.log("^oTrackend")
+        
         if (message.reason !== 'REPLACED') {
-            console.log("[!] not playing")
             this.playing = false;
             this.lastTrack = this.track;
             this.track = null;
