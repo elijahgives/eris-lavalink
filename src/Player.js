@@ -8,29 +8,43 @@ try {
     EventEmitter = require('events').EventEmitter;
 }
 
+const axios = require("axios");
+
+ /**
+ * @typedef {import('./PlayerManager')} PlayerManager
+ * @typedef {import('./Lavalink')} Lavalink
+ */
+
+/** @typedef {Object} BandSettings
+ * @prop {Number} band The band to change, it ranges from `0` to `14`, 0 being lowest frequency
+ * @prop {Number} gain The gain to apply to the band, ranges from `-0.25` to `1.0`, `-0.25` effectively muting the band, and `0.25` doubling it
+ */
+
 /**
  * Represents a player/voice connection to Lavalink
  * @extends EventEmitter
- * @prop {string} id Guild id for the player
+ * @prop {String} id Guild id for the player
  * @prop {PlayerManager} manager Reference to the player manager
  * @prop {Lavalink} node Lavalink node the player is connected to
- * @prop {object} shard The eris shard the player is associated with
- * @prop {string} hostname Hostname of the lavalink node
- * @prop {string} guildId Guild ID
- * @prop {string} channelId Channel ID
- * @prop {boolean} ready If the connection is ready
- * @prop {boolean} playing If the player is playing
- * @prop {object} state The lavalink player state
- * @prop {string} track The lavalink track to play
+ * @prop {Object} shard The eris shard the player is associated with
+ * @prop {String} hostname Hostname of the lavalink node
+ * @prop {String} guildId Guild ID
+ * @prop {String} channelId Channel ID
+ * @prop {Boolean} ready If the connection is ready
+ * @prop {Boolean} playing If the player is playing
+ * @prop {Object} state The lavalink player state
+ * @prop {Number} state.position The position in milliseconds on the current track playback
+ * @prop {Number} state.time The timestamp at which latest state update from lavalink was received
+ * @prop {String} track The encoded identifier of the currently playing track
  */
 class Player extends EventEmitter {
     /**
      * Player constructor
-     * @param {string} id Guild ID
+     * @param {String} id Guild ID
      * @param {Object} data Player data
-     * @param {string} data.channelId The channel id of the player
-     * @param {string} data.guildId The guild id of the player
-     * @param {string} data.hostname The hostname of the lavalink node
+     * @param {String} data.channelId The channel id of the player
+     * @param {String} data.guildId The guild id of the player
+     * @param {String} data.hostname The hostname of the lavalink node
      * @param {PlayerManager} data.manager The PlayerManager associated with this player
      * @param {Lavalink} data.node The Lavalink node associated with this player
      * @param {Shard} data.shard The eris shard associated with this player
@@ -51,60 +65,45 @@ class Player extends EventEmitter {
         this.shard = shard;
         this.state = {};
         this.track = null;
+        this.sessionId = null;
         this.sendQueue = [];
         this.timestamp = Date.now();
-    }
 
-    /**
-     * Check the event queue
-     * @private
-     */
-    checkEventQueue() {
-        if (this.sendQueue.length > 0) {
-            let event = this.sendQueue.splice(0,1);
-            this.sendEvent(event[0]);
-        }
-    }
-
-    /**
-     * Queue an event to be sent to Lavalink
-     * @param {*} data The payload to queue
-     * @private
-     */
-    queueEvent(data) {
-        if (this.sendQueue.length > 0) {
-            this.sendQueue.push(data);
-        } else {
-            return this.sendEvent(data);
-        }
-    }
-
-    /**
-     * Send a payload to Lavalink
-     * @param {*} data The payload to send
-     * @private
-     */
-    async sendEvent(data) {
-        this.node.send(data);
-        process.nextTick(() => this.checkEventQueue());
+        this.baseUrl = `http://${this.node.host}:${this.node.port}`
     }
 
     /**
      * Connect to the Lavalink node
      * @param {Object} data The data used to connect
-     * @param {string} data.guildId The guild ID to connect
-     * @param {string} data.sessionId The voice connection session ID
-     * @param {object} data.event The event data from the voice server update
+     * @param {String} data.guildId The guild ID to connect
+     * @param {String} data.sessionId The voice connection session ID
+     * @param {Object} data.event The event data from the voice server update
      * @returns {void}
      */
-    connect(data) {
+    async connect(data) {
         this.emit('connect');
-        this.queueEvent({
-            op: 'voiceUpdate',
-            guildId: data.guildId,
-            sessionId: data.sessionId,
-            event: data.event,
-        });
+
+        this.sessionId = data.sessionId;
+        try {
+            await axios.patch(
+                `${this.baseUrl}/v4/sessions/${this.sessionId}/players/${data.guildId}`,
+                {
+                    voice: {
+                        sessionId: data.event.session_id,
+                        token: data.event.token,
+                        endpoint: data.event.endpoint
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: this.node.password,
+                        Accept: 'application/json'
+                    }
+                }
+            );
+        } catch (e) {
+            console.error(e);
+        }
 
         process.nextTick(() => this.emit('ready'));
     }
@@ -114,30 +113,31 @@ class Player extends EventEmitter {
      * @param {*} [msg] An optional disconnect message
      * @returns {void}
      */
-    disconnect(msg) {
-        this._disconnect();
+    async disconnect(msg) {
+        await this._disconnect();
         this.emit('disconnect', msg);
     }
 
-    _disconnect() {
+    async _disconnect() {
+        console.log("_disconnect called")
         this.playing = false;
 
         if (this.paused) {
-            this.resume();
+            await this.resume();
         }
 
-        this.queueEvent({ op: 'destroy', guildId: this.guildId });
+        // this.queueEvent({ op: 'destroy', guildId: this.guildId });
 
-        this.stop();
+        await this.stop();
     }
 
     /**
      * Play a Lavalink track
-     * @param {string} track The track to play
+     * @param {String} track The track to play
      * @param {Object} [options] Optional options to send
      * @returns {void}
      */
-    play(track, options) {
+    async play(track, options) {
         this.lastTrack = this.track;
         this.track = track;
         this.playOptions = options;
@@ -147,13 +147,26 @@ class Player extends EventEmitter {
             return this.manager.switchNode(this);
         }
 
-        let payload = Object.assign({
-            op: 'play',
-            guildId: this.guildId,
-            track: track,
-        }, options);
+        try {
+            await axios.patch(
+                `${this.baseUrl}/v4/sessions/${this.sessionId}/players/${this.guildId}?noReplace=true`,
+                {
+                    track: {
+                        encoded: track
+                    },
+                    ...options
+                },
+                {
+                    headers: {
+                        Authorization: this.node.password,
+                        Accept: 'application/json'
+                    }
+                }
+            );
+        } catch (err) {
+            console.error(err);
+        }
 
-        this.queueEvent(payload);
         this.playing = !this.paused;
         this.timestamp = Date.now();
     }
@@ -162,13 +175,28 @@ class Player extends EventEmitter {
      * Stop playing
      * @returns {void}
      */
-    stop() {
-        let payload = {
-            op: 'stop',
-            guildId: this.guildId,
-        };
+    async stop() {
+        console.log("[!] stopping")
 
-        this.queueEvent(payload);
+        try {
+            await axios.patch(
+                `${this.baseUrl}/v4/sessions/${this.sessionId}/players/${this.guildId}`,
+                {
+                    track: {
+                        encoded: null
+                    }
+                },
+                {
+                    headers: {
+                        Authorization: this.node.password,
+                        Accept: 'application/json'
+                    }
+                }
+            );
+        } catch (err) {
+            console.error(err);
+        }
+
         this.playing = false;
         this.lastTrack = this.track;
         this.track = null;
@@ -181,66 +209,114 @@ class Player extends EventEmitter {
      */
     stateUpdate(state) {
         this.state = state;
+        process.nextTick(() => this.emit('stateUpdate', state));
     }
 
     /**
      * Used to pause/resume the player
-     * @param {boolean} pause Set pause to true/false
+     * @param {Boolean} pause Set pause to true/false
      * @returns {void}
      */
-    setPause(pause) {
-        this.node.send({
-            op: 'pause',
-            guildId: this.guildId,
-            pause: pause,
-        });
+    async setPause(pause) {
+        try {
+            await axios.patch(
+                `${this.baseUrl}/v4/sessions/${this.sessionId}/players/${this.guildId}`,
+                {
+                    paused: pause
+                },
+                {
+                    headers: {
+                        Authorization: this.node.password,
+                        Accept: 'application/json'
+                    }
+                }
+            );
+        } catch (e) {
+            console.error(e);
+        }
+
 
         this.paused = pause;
         this.playing = !pause;
     }
 
     /**
+     * 
+     * @param {Array<BandSettings>} bands The bands to edit
+     * @returns {void}
+     */
+    setEqualizer(bands) {
+        // this.node.send({
+        //     op: 'equalizer',
+        //     guildId: this.guildId,
+        //     bands
+        // });
+    }
+
+    /**
+     * Destroy the player, may be used to move a player to another node
+     * @returns {void}
+     */
+     destroy() {
+        // this.node.send({
+        //     op: 'destroy',
+        //     guildId: this.guildId
+        // });
+    }
+
+    /**
      * Used to pause the player
      */
-    pause() {
+    async pause() {
         if (this.playing) {
-            this.setPause(true);
+            await this.setPause(true);
         }
     }
 
     /**
      * Used to resume the player
      */
-    resume() {
+    async resume() {
         if (!this.playing && this.paused) {
-            this.setPause(false)
+            await this.setPause(false)
         }
     }
 
     /**
      * Used for seeking to a track position
-     * @param {number} position The position to seek to
+     * @param {Number} position The position to seek to
      * @returns {void}
      */
     seek(position) {
-        this.node.send({
-            op: 'seek',
-            guildId: this.guildId,
-            position: position,
-        });
+        // this.node.send({
+        //     op: 'seek',
+        //     guildId: this.guildId,
+        //     position: position,
+        // });
     }
 
     /**
      * Set the volume of the player
-     * @param {number} volume The volume level to set
+     * @param {Number} volume The volume level to set
      * @returns {void}
      */
-    setVolume(volume) {
-        this.node.send({
-            op: 'volume',
-            guildId: this.guildId,
-            volume: volume,
-        });
+    async setVolume(volume) {
+        try {
+            await axios.patch(
+                `${this.baseUrl}/v4/sessions/${this.sessionId}/players/${this.guildId}`,
+                {
+                    volume: volume
+                },
+                {
+                    headers: {
+                        Authorization: this.node.password,
+                        Accept: 'application/json'
+                    }
+                }
+            );
+        } catch (err) {
+            console.error(err);
+        }
     }
 
     /**
@@ -249,7 +325,10 @@ class Player extends EventEmitter {
      * @private
      */
     onTrackEnd(message) {
+        console.log(message);
+        console.log("^oTrackend")
         if (message.reason !== 'REPLACED') {
+            console.log("[!] not playing")
             this.playing = false;
             this.lastTrack = this.track;
             this.track = null;
@@ -277,9 +356,22 @@ class Player extends EventEmitter {
     }
 
     /**
+     * Called on speaking start or stop
+     * @param {Object} message The message if exists
+     * @private
+     */
+    onSpeaking(message) {
+        if (message.speaking) {
+            process.nextTick(() => this.emit('speakingStart', message.userId));
+        } else {
+            process.nextTick(() => this.emit('speakingStop', message.userId));
+        }
+    }
+
+    /**
      * Switch voice channel
-     * @param {string} channelId Called when switching channels
-     * @param {boolean} [reactive] Used if you want the bot to switch channels
+     * @param {String} channelId Called when switching channels
+     * @param {Boolean} [reactive] Used if you want the bot to switch channels
      * @returns {void}
      */
     switchChannel(channelId, reactive) {
@@ -299,12 +391,12 @@ class Player extends EventEmitter {
 
     /**
      * Update the bot's voice state
-     * @param {boolean} selfMute Whether the bot muted itself or not (audio sending is unaffected)
-     * @param {boolean} selfDeaf Whether the bot deafened itself or not (audio receiving is unaffected)
+     * @param {Boolean} selfMute Whether the bot muted itself or not (audio sending is unaffected)
+     * @param {Boolean} selfDeaf Whether the bot deafened itself or not (audio receiving is unaffected)
      * @private
      */
     updateVoiceState(channelId, selfMute, selfDeaf) {
-        if (this.shard.sendWS) {
+        if (this.shard && this.shard.sendWS) {
             this.shard.sendWS(Constants.GatewayOPCodes.VOICE_STATE_UPDATE, {
                 guild_id: this.id === 'call' ? null : this.id,
                 channel_id: channelId || null,
