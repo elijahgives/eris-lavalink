@@ -2,11 +2,12 @@
 
 A [Lavalink](https://github.com/Frederikam/Lavalink) client for [eris](https://github.com/abalabahaha/eris)
 
+Compatible with Lavalink 4 using REST API.
+
 ## Links
-- **[Documentation](https://briantanner.github.io/eris-lavalink/)**
-- **[Lavalink](https://github.com/Frederikam/Lavalink)**
+- **[Documentation (Old)](https://briantanner.github.io/eris-lavalink/)**
+- **[Lavalink](https://github.com/lavalink-devs/Lavalink)**
 - **[eris](https://github.com/abalabahaha/eris)**
-- **[lavalink.js](https://github.com/briantanner/lavalink.js)** (discord.js port)
 
 ## Install
 ```
@@ -44,22 +45,21 @@ if (!(client.voiceConnections instanceof PlayerManager)) {
 
 To resolve a track, use the Lavalink rest api
 ```js
-const superagent = require('superagent');
+const axios = require('axios');
 
 async function resolveTracks(node, search) {
 	try {
-		var result = await superagent.get(`http://${node.host}:2333/loadtracks?identifier=${search}`)
-			.set('Authorization', node.password)
-			.set('Accept', 'application/json');
+		const { data } = await axios.get(`http://${node.host}:2333/v4/loadtracks?identifier=${search}`, {
+			headers: {
+				Authorization: node.password,
+				Accept: 'application/json'
+			}
+		});
 	} catch (err) {
 		throw err;
 	}
 
-	if (!result) {
-		throw 'Unable play that video.';
-	}
-
-	return result.body; // array of tracks resolved from lavalink
+	return data.data; // array of tracks resolved from lavalink
 }
 
 resolveTracks(node, 'ytsearch:the 30 second video').then(tracks => {
